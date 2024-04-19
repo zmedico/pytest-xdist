@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import os
 import re
 import shutil
-from typing import Dict
-from typing import List
-from typing import Tuple
+from typing import cast
 
 import pytest
+
 import xdist
 
 
@@ -109,12 +110,12 @@ class TestDistribution:
         )
         assert result.ret == 1
 
-    def test_exitfail_waits_for_workers_to_finish(
+    def test_exitfirst_waits_for_workers_to_finish(
         self, pytester: pytest.Pytester
     ) -> None:
         """The DSession waits for workers before exiting early on failure.
 
-        When -x/--exitfail is set, the DSession wait for the workers to finish
+        When -x/--exitfirst is set, the DSession wait for all workers to finish
         before raising an Interrupt exception. This prevents reports from the
         faiing test and other tests from being discarded.
         """
@@ -138,15 +139,14 @@ class TestDistribution:
                 time.sleep(0.3)
         """
         )
+        # Two workers are used
         result = pytester.runpytest(p1, "-x", "-rA", "-v", "-n2")
         assert result.ret == 2
-        result.stdout.re_match_lines([".*Interrupted: stopping.*[12].*"])
-        m = re.search(r"== (\d+) failed, (\d+) passed in ", str(result.stdout))
-        assert m
-        n_failed, n_passed = (int(s) for s in m.groups())
-        assert 1 <= n_failed <= 2
-        assert 1 <= n_passed <= 3
-        assert (n_passed + n_failed) < 6
+        # DSession should stop when the first failure is reached. Two failures
+        # may actually occur, due to timing.
+        outcomes = result.parseoutcomes()
+        assert "failed" in outcomes, "Expected at least one failure"
+        assert 1 <= outcomes["failed"] <= 2, "Expected no more than 2 failures"
 
     def test_basetemp_in_subprocesses(self, pytester: pytest.Pytester) -> None:
         p1 = pytester.makepyfile(
@@ -224,7 +224,7 @@ class TestDistribution:
         assert result.ret == 1
 
     def test_distribution_rsyncdirs_example(
-        self, pytester: pytest.Pytester, monkeypatch
+        self, pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # use a custom plugin that has a custom command-line option to ensure
         # this is propagated to workers (see #491)
@@ -266,8 +266,8 @@ class TestDistribution:
             "-pfoobarplugin",
             "--foobar=123",
             "--dist=load",
-            "--rsyncdir=%(subdir)s" % locals(),
-            "--tx=popen//chdir=%(dest)s" % locals(),
+            f"--rsyncdir={subdir}",
+            f"--tx=popen//chdir={dest}",
             p,
         )
         assert result.ret == 0
@@ -416,7 +416,7 @@ class TestDistEach:
 
 class TestTerminalReporting:
     @pytest.mark.parametrize("verbosity", ["", "-q", "-v"])
-    def test_output_verbosity(self, pytester, verbosity: str) -> None:
+    def test_output_verbosity(self, pytester: pytest.Pytester, verbosity: str) -> None:
         pytester.makepyfile(
             """
             def test_ok():
@@ -482,7 +482,7 @@ class TestTerminalReporting:
         )
 
     def test_logfinish_hook(self, pytester: pytest.Pytester) -> None:
-        """Ensure the pytest_runtest_logfinish hook is being properly handled"""
+        """Ensure the pytest_runtest_logfinish hook is being properly handled."""
         pytester.makeconftest(
             """
             def pytest_runtest_logfinish():
@@ -611,9 +611,9 @@ def test_fixture_teardown_failure(pytester: pytest.Pytester) -> None:
 
 
 def test_config_initialization(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, pytestconfig
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ensure workers and controller are initialized consistently. Integration test for #445"""
+    """Ensure workers and controller are initialized consistently. Integration test for #445."""
     pytester.makepyfile(
         **{
             "dir_a/test_foo.py": """
@@ -636,8 +636,8 @@ def test_config_initialization(
 
 
 @pytest.mark.parametrize("when", ["setup", "call", "teardown"])
-def test_crashing_item(pytester, when) -> None:
-    """Ensure crashing item is correctly reported during all testing stages"""
+def test_crashing_item(pytester: pytest.Pytester, when: str) -> None:
+    """Ensure crashing item is correctly reported during all testing stages."""
     code = dict(setup="", call="", teardown="")
     code[when] = "os._exit(1)"
     p = pytester.makepyfile(
@@ -657,9 +657,7 @@ def test_crashing_item(pytester, when) -> None:
 
         def test_ok():
             pass
-    """.format(
-            **code
-        )
+    """.format(**code)
     )
     passes = 2 if when == "teardown" else 1
     result = pytester.runpytest("-n2", p)
@@ -769,8 +767,8 @@ def test_tmpdir_disabled(pytester: pytest.Pytester) -> None:
 
 
 @pytest.mark.parametrize("plugin", ["xdist.looponfail"])
-def test_sub_plugins_disabled(pytester, plugin) -> None:
-    """Test that xdist doesn't break if we disable any of its sub-plugins. (#32)"""
+def test_sub_plugins_disabled(pytester: pytest.Pytester, plugin: str) -> None:
+    """Test that xdist doesn't break if we disable any of its sub-plugins (#32)."""
     p1 = pytester.makepyfile(
         """
         def test_ok():
@@ -784,7 +782,7 @@ def test_sub_plugins_disabled(pytester, plugin) -> None:
 
 class TestWarnings:
     @pytest.mark.parametrize("n", ["-n0", "-n1"])
-    def test_warnings(self, pytester, n) -> None:
+    def test_warnings(self, pytester: pytest.Pytester, n: str) -> None:
         pytester.makepyfile(
             """
             import warnings, py, pytest
@@ -800,9 +798,7 @@ class TestWarnings:
     def test_warning_captured_deprecated_in_pytest_6(
         self, pytester: pytest.Pytester
     ) -> None:
-        """
-        Do not trigger the deprecated pytest_warning_captured hook in pytest 6+ (#562)
-        """
+        """Do not trigger the deprecated pytest_warning_captured hook in pytest 6+ (#562)."""
         from _pytest import hookspec
 
         if not hasattr(hookspec, "pytest_warning_captured"):
@@ -832,9 +828,9 @@ class TestWarnings:
         result.stdout.no_fnmatch_line("*this hook should not be called in this version")
 
     @pytest.mark.parametrize("n", ["-n0", "-n1"])
-    def test_custom_subclass(self, pytester, n) -> None:
+    def test_custom_subclass(self, pytester: pytest.Pytester, n: str) -> None:
         """Check that warning subclasses that don't honor the args attribute don't break
-        pytest-xdist (#344)
+        pytest-xdist (#344).
         """
         pytester.makepyfile(
             """
@@ -856,7 +852,7 @@ class TestWarnings:
         result.stdout.fnmatch_lines(["*MyWarning*", "*1 passed, 1 warning*"])
 
     @pytest.mark.parametrize("n", ["-n0", "-n1"])
-    def test_unserializable_arguments(self, pytester, n) -> None:
+    def test_unserializable_arguments(self, pytester: pytest.Pytester, n: str) -> None:
         """Check that warnings with unserializable arguments are handled correctly (#349)."""
         pytester.makepyfile(
             """
@@ -874,7 +870,9 @@ class TestWarnings:
         result.stdout.fnmatch_lines(["*UserWarning*foo.txt*", "*1 passed, 1 warning*"])
 
     @pytest.mark.parametrize("n", ["-n0", "-n1"])
-    def test_unserializable_warning_details(self, pytester, n) -> None:
+    def test_unserializable_warning_details(
+        self, pytester: pytest.Pytester, n: str
+    ) -> None:
         """Check that warnings with unserializable _WARNING_DETAILS are
         handled correctly (#379).
         """
@@ -1054,7 +1052,7 @@ class TestNodeFailure:
 
 
 @pytest.mark.parametrize("n", [0, 2])
-def test_worker_id_fixture(pytester, n) -> None:
+def test_worker_id_fixture(pytester: pytest.Pytester, n: int) -> None:
     import glob
 
     f = pytester.makepyfile(
@@ -1070,8 +1068,8 @@ def test_worker_id_fixture(pytester, n) -> None:
     result.stdout.fnmatch_lines("* 2 passed in *")
     worker_ids = set()
     for fname in glob.glob(str(pytester.path / "*.txt")):
-        with open(fname) as f:
-            worker_ids.add(f.read().strip())
+        with open(fname) as fp:
+            worker_ids.add(fp.read().strip())
     if n == 0:
         assert worker_ids == {"master"}
     else:
@@ -1079,7 +1077,7 @@ def test_worker_id_fixture(pytester, n) -> None:
 
 
 @pytest.mark.parametrize("n", [0, 2])
-def test_testrun_uid_fixture(pytester, n) -> None:
+def test_testrun_uid_fixture(pytester: pytest.Pytester, n: int) -> None:
     import glob
 
     f = pytester.makepyfile(
@@ -1095,14 +1093,14 @@ def test_testrun_uid_fixture(pytester, n) -> None:
     result.stdout.fnmatch_lines("* 2 passed in *")
     testrun_uids = set()
     for fname in glob.glob(str(pytester.path / "*.txt")):
-        with open(fname) as f:
-            testrun_uids.add(f.read().strip())
+        with open(fname) as fp:
+            testrun_uids.add(fp.read().strip())
     assert len(testrun_uids) == 1
     assert len(testrun_uids.pop()) == 32
 
 
 @pytest.mark.parametrize("tb", ["auto", "long", "short", "no", "line", "native"])
-def test_error_report_styles(pytester, tb) -> None:
+def test_error_report_styles(pytester: pytest.Pytester, tb: str) -> None:
     pytester.makepyfile(
         """
         import pytest
@@ -1116,14 +1114,11 @@ def test_error_report_styles(pytester, tb) -> None:
     result.assert_outcomes(failed=1)
 
 
-def test_color_yes_collection_on_non_atty(pytester, request) -> None:
-    """skip collect progress report when working on non-terminals.
+def test_color_yes_collection_on_non_atty(pytester: pytest.Pytester) -> None:
+    """Skip collect progress report when working on non-terminals.
 
     Similar to pytest-dev/pytest#1397
     """
-    tr = request.config.pluginmanager.getplugin("terminalreporter")
-    if not hasattr(tr, "isatty"):
-        pytest.skip("only valid for newer pytest versions")
     pytester.makepyfile(
         """
         import pytest
@@ -1141,10 +1136,8 @@ def test_color_yes_collection_on_non_atty(pytester, request) -> None:
     assert "collecting:" not in result.stdout.str()
 
 
-def test_without_terminal_plugin(pytester, request) -> None:
-    """
-    No output when terminal plugin is disabled
-    """
+def test_without_terminal_plugin(pytester: pytest.Pytester) -> None:
+    """No output when terminal plugin is disabled."""
     pytester.makepyfile(
         """
         def test_1():
@@ -1158,9 +1151,7 @@ def test_without_terminal_plugin(pytester, request) -> None:
 
 
 def test_internal_error_with_maxfail(pytester: pytest.Pytester) -> None:
-    """
-    Internal error when using --maxfail option (#62, #65).
-    """
+    """Internal error when using --maxfail option (#62, #65)."""
     pytester.makepyfile(
         """
         import pytest
@@ -1178,6 +1169,21 @@ def test_internal_error_with_maxfail(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest_subprocess("--maxfail=1", "-n1")
     result.stdout.re_match_lines([".* [12] errors? in .*"])
     assert "INTERNALERROR" not in result.stderr.str()
+
+
+def test_maxfail_causes_early_termination(pytester: pytest.Pytester) -> None:
+    """Ensure subsequent tests on a worker aren't run when using --maxfail (#1024)."""
+    pytester.makepyfile(
+        """
+        def test1():
+            assert False
+
+        def test2():
+            pass
+    """
+    )
+    result = pytester.runpytest_subprocess("--maxfail=1", "-n 1")
+    result.assert_outcomes(failed=1)
 
 
 def test_internal_errors_propagate_to_controller(pytester: pytest.Pytester) -> None:
@@ -1365,7 +1371,7 @@ class TestFileScope:
 
 
 class TestGroupScope:
-    def test_by_module(self, testdir):
+    def test_by_module(self, pytester: pytest.Pytester) -> None:
         test_file = """
             import pytest
             class TestA:
@@ -1374,8 +1380,8 @@ class TestGroupScope:
                 def test(self, i):
                     pass
         """
-        testdir.makepyfile(test_a=test_file, test_b=test_file)
-        result = testdir.runpytest("-n2", "--dist=loadgroup", "-v")
+        pytester.makepyfile(test_a=test_file, test_b=test_file)
+        result = pytester.runpytest("-n2", "--dist=loadgroup", "-v")
         test_a_workers_and_test_count = get_workers_and_test_count_by_prefix(
             "test_a.py::TestA", result.outlines
         )
@@ -1396,8 +1402,8 @@ class TestGroupScope:
             == test_b_workers_and_test_count.items()
         )
 
-    def test_by_class(self, testdir):
-        testdir.makepyfile(
+    def test_by_class(self, pytester: pytest.Pytester) -> None:
+        pytester.makepyfile(
             test_a="""
             import pytest
             class TestA:
@@ -1412,7 +1418,7 @@ class TestGroupScope:
                     pass
         """
         )
-        result = testdir.runpytest("-n2", "--dist=loadgroup", "-v")
+        result = pytester.runpytest("-n2", "--dist=loadgroup", "-v")
         test_a_workers_and_test_count = get_workers_and_test_count_by_prefix(
             "test_a.py::TestA", result.outlines
         )
@@ -1433,7 +1439,7 @@ class TestGroupScope:
             == test_b_workers_and_test_count.items()
         )
 
-    def test_module_single_start(self, testdir):
+    def test_module_single_start(self, pytester: pytest.Pytester) -> None:
         test_file1 = """
             import pytest
             @pytest.mark.xdist_group(name="xdist_group")
@@ -1448,15 +1454,15 @@ class TestGroupScope:
             def test_2():
                 pass
         """
-        testdir.makepyfile(test_a=test_file1, test_b=test_file1, test_c=test_file2)
-        result = testdir.runpytest("-n2", "--dist=loadgroup", "-v")
+        pytester.makepyfile(test_a=test_file1, test_b=test_file1, test_c=test_file2)
+        result = pytester.runpytest("-n2", "--dist=loadgroup", "-v")
         a = get_workers_and_test_count_by_prefix("test_a.py::test", result.outlines)
         b = get_workers_and_test_count_by_prefix("test_b.py::test", result.outlines)
         c = get_workers_and_test_count_by_prefix("test_c.py::test_2", result.outlines)
 
         assert a.keys() == b.keys() and b.keys() == c.keys()
 
-    def test_with_two_group_names(self, testdir):
+    def test_with_two_group_names(self, pytester: pytest.Pytester) -> None:
         test_file = """
             import pytest
             @pytest.mark.xdist_group(name="group1")
@@ -1466,8 +1472,8 @@ class TestGroupScope:
             def test_2():
                 pass
         """
-        testdir.makepyfile(test_a=test_file, test_b=test_file)
-        result = testdir.runpytest("-n2", "--dist=loadgroup", "-v")
+        pytester.makepyfile(test_a=test_file, test_b=test_file)
+        result = pytester.runpytest("-n2", "--dist=loadgroup", "-v")
         a_1 = get_workers_and_test_count_by_prefix("test_a.py::test_1", result.outlines)
         a_2 = get_workers_and_test_count_by_prefix("test_a.py::test_2", result.outlines)
         b_1 = get_workers_and_test_count_by_prefix("test_b.py::test_1", result.outlines)
@@ -1504,18 +1510,20 @@ class TestLocking:
 
     FILE_LOCK = filelock.FileLock("test.lock")
 
-    """ + (
-        (_test_content * 4) % ("A", "B", "C", "D")
-    )
+    """ + ((_test_content * 4) % ("A", "B", "C", "D"))
 
-    @pytest.mark.parametrize("scope", ["each", "load", "loadscope", "loadfile", "no"])
-    def test_single_file(self, pytester, scope) -> None:
+    @pytest.mark.parametrize(
+        "scope", ["each", "load", "loadscope", "loadfile", "worksteal", "no"]
+    )
+    def test_single_file(self, pytester: pytest.Pytester, scope: str) -> None:
         pytester.makepyfile(test_a=self.test_file1)
         result = pytester.runpytest("-n2", "--dist=%s" % scope, "-v")
         result.assert_outcomes(passed=(12 if scope != "each" else 12 * 2))
 
-    @pytest.mark.parametrize("scope", ["each", "load", "loadscope", "loadfile", "no"])
-    def test_multi_file(self, pytester, scope) -> None:
+    @pytest.mark.parametrize(
+        "scope", ["each", "load", "loadscope", "loadfile", "worksteal", "no"]
+    )
+    def test_multi_file(self, pytester: pytest.Pytester, scope: str) -> None:
         pytester.makepyfile(
             test_a=self.test_file1,
             test_b=self.test_file1,
@@ -1526,7 +1534,7 @@ class TestLocking:
         result.assert_outcomes(passed=(48 if scope != "each" else 48 * 2))
 
 
-def parse_tests_and_workers_from_output(lines: List[str]) -> List[Tuple[str, str, str]]:
+def parse_tests_and_workers_from_output(lines: list[str]) -> list[tuple[str, str, str]]:
     result = []
     for line in lines:
         # example match: "[gw0] PASSED test_a.py::test[7]"
@@ -1548,9 +1556,9 @@ def parse_tests_and_workers_from_output(lines: List[str]) -> List[Tuple[str, str
 
 
 def get_workers_and_test_count_by_prefix(
-    prefix: str, lines: List[str], expected_status: str = "PASSED"
-) -> Dict[str, int]:
-    result: Dict[str, int] = {}
+    prefix: str, lines: list[str], expected_status: str = "PASSED"
+) -> dict[str, int]:
+    result: dict[str, int] = {}
     for worker, status, nodeid in parse_tests_and_workers_from_output(lines):
         if expected_status == status and nodeid.startswith(prefix):
             result[worker] = result.get(worker, 0) + 1
@@ -1559,32 +1567,32 @@ def get_workers_and_test_count_by_prefix(
 
 class TestAPI:
     @pytest.fixture
-    def fake_request(self):
+    def fake_request(self) -> pytest.FixtureRequest:
         class FakeOption:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.dist = "load"
 
         class FakeConfig:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.workerinput = {"workerid": "gw5"}
                 self.option = FakeOption()
 
         class FakeRequest:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.config = FakeConfig()
 
-        return FakeRequest()
+        return cast(pytest.FixtureRequest, FakeRequest())
 
-    def test_is_xdist_worker(self, fake_request) -> None:
+    def test_is_xdist_worker(self, fake_request: pytest.FixtureRequest) -> None:
         assert xdist.is_xdist_worker(fake_request)
-        del fake_request.config.workerinput
+        del fake_request.config.workerinput  # type: ignore[attr-defined]
         assert not xdist.is_xdist_worker(fake_request)
 
-    def test_is_xdist_controller(self, fake_request) -> None:
+    def test_is_xdist_controller(self, fake_request: pytest.FixtureRequest) -> None:
         assert not xdist.is_xdist_master(fake_request)
         assert not xdist.is_xdist_controller(fake_request)
 
-        del fake_request.config.workerinput
+        del fake_request.config.workerinput  # type: ignore[attr-defined]
         assert xdist.is_xdist_master(fake_request)
         assert xdist.is_xdist_controller(fake_request)
 
@@ -1592,19 +1600,19 @@ class TestAPI:
         assert not xdist.is_xdist_master(fake_request)
         assert not xdist.is_xdist_controller(fake_request)
 
-    def test_get_xdist_worker_id(self, fake_request) -> None:
+    def test_get_xdist_worker_id(self, fake_request: pytest.FixtureRequest) -> None:
         assert xdist.get_xdist_worker_id(fake_request) == "gw5"
-        del fake_request.config.workerinput
+        del fake_request.config.workerinput  # type: ignore[attr-defined]
         assert xdist.get_xdist_worker_id(fake_request) == "master"
 
 
-def test_collection_crash(testdir):
-    p1 = testdir.makepyfile(
+def test_collection_crash(pytester: pytest.Pytester) -> None:
+    p1 = pytester.makepyfile(
         """
         assert 0
     """
     )
-    result = testdir.runpytest(p1, "-n1")
+    result = pytester.runpytest(p1, "-n1")
     assert result.ret == 1
     result.stdout.fnmatch_lines(
         [
@@ -1617,19 +1625,19 @@ def test_collection_crash(testdir):
     )
 
 
-def test_dist_in_addopts(testdir):
+def test_dist_in_addopts(pytester: pytest.Pytester) -> None:
     """Users can set a default distribution in the configuration file (#789)."""
-    testdir.makepyfile(
+    pytester.makepyfile(
         """
         def test():
             pass
         """
     )
-    testdir.makeini(
+    pytester.makeini(
         """
         [pytest]
         addopts = --dist loadscope
         """
     )
-    result = testdir.runpytest()
+    result = pytester.runpytest()
     assert result.ret == 0

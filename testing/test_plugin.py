@@ -1,19 +1,19 @@
 from contextlib import suppress
+import os
 from pathlib import Path
 import sys
-import os
 
 import execnet
-from xdist.workermanage import NodeManager
-
 import pytest
+
+from xdist.workermanage import NodeManager
 
 
 @pytest.fixture
-def monkeypatch_3_cpus(monkeypatch: pytest.MonkeyPatch):
-    """Make pytest-xdist believe the system has 3 CPUs"""
+def monkeypatch_3_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make pytest-xdist believe the system has 3 CPUs."""
     # block import
-    monkeypatch.setitem(sys.modules, "psutil", None)  # type: ignore
+    monkeypatch.setitem(sys.modules, "psutil", None)
     monkeypatch.delattr(os, "sched_getaffinity", raising=False)
     monkeypatch.setattr(os, "cpu_count", lambda: 3)
 
@@ -48,6 +48,23 @@ def test_dist_options(pytester: pytest.Pytester) -> None:
     check_options(config)
     assert config.option.dist == "load"
 
+    config = pytester.parseconfigure("--numprocesses", "0")
+    check_options(config)
+    assert config.option.dist == "no"
+    assert config.option.tx == []
+
+    config = pytester.parseconfigure("--numprocesses", "0", "-d")
+    check_options(config)
+    assert config.option.dist == "no"
+    assert config.option.tx == []
+
+    config = pytester.parseconfigure(
+        "--numprocesses", "0", "--dist", "each", "--tx", "2*popen"
+    )
+    check_options(config)
+    assert config.option.dist == "no"
+    assert config.option.tx == []
+
 
 def test_auto_detect_cpus(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
@@ -77,17 +94,12 @@ def test_auto_detect_cpus(
     check_options(config)
     assert config.getoption("numprocesses") == 99
 
-    config = pytester.parseconfigure("-nauto", "--pdb")
-    check_options(config)
-    assert config.getoption("usepdb")
-    assert config.getoption("numprocesses") == 0
-    assert config.getoption("dist") == "no"
-
-    config = pytester.parseconfigure("-nlogical", "--pdb")
-    check_options(config)
-    assert config.getoption("usepdb")
-    assert config.getoption("numprocesses") == 0
-    assert config.getoption("dist") == "no"
+    for numprocesses in (0, "auto", "logical"):
+        config = pytester.parseconfigure(f"-n{numprocesses}", "--pdb")
+        check_options(config)
+        assert config.getoption("usepdb")
+        assert config.getoption("numprocesses") == 0
+        assert config.getoption("dist") == "no"
 
     monkeypatch.delattr(os, "sched_getaffinity", raising=False)
     monkeypatch.setenv("TRAVIS", "true")
@@ -116,7 +128,7 @@ def test_auto_detect_cpus_psutil(
 
 
 def test_auto_detect_cpus_os(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus: None
 ) -> None:
     from xdist.plugin import pytest_cmdline_main as check_options
 
@@ -177,7 +189,7 @@ def test_hook_auto_num_workers_arg(
 
 
 def test_hook_auto_num_workers_none(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus: None
 ) -> None:
     # Returning None from a hook to skip it is pytest behavior,
     # but we document it so let's test it.
@@ -219,7 +231,7 @@ def test_envvar_auto_num_workers(
 
 
 def test_envvar_auto_num_workers_warn(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus: None
 ) -> None:
     from xdist.plugin import pytest_cmdline_main as check_options
 
@@ -232,7 +244,7 @@ def test_envvar_auto_num_workers_warn(
 
 
 def test_auto_num_workers_hook_overrides_envvar(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, monkeypatch_3_cpus: None
 ) -> None:
     from xdist.plugin import pytest_cmdline_main as check_options
 

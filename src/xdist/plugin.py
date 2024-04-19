@@ -1,18 +1,19 @@
+from __future__ import annotations
+
 import os
-import uuid
 import sys
+from typing import Literal
+import uuid
 import warnings
 
 import pytest
 
 
-PYTEST_GTE_7 = hasattr(pytest, "version_tuple") and pytest.version_tuple >= (7, 0)  # type: ignore[attr-defined]
-
 _sys_path = list(sys.path)  # freeze a copy of sys.path at interpreter startup
 
 
 @pytest.hookimpl
-def pytest_xdist_auto_num_workers(config):
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
     env_var = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
     if env_var:
         try:
@@ -27,14 +28,14 @@ def pytest_xdist_auto_num_workers(config):
     except ImportError:
         pass
     else:
-        use_logical = config.option.numprocesses == "logical"
+        use_logical: bool = config.option.numprocesses == "logical"
         count = psutil.cpu_count(logical=use_logical) or psutil.cpu_count()
         if count:
             return count
     try:
         from os import sched_getaffinity
 
-        def cpu_count():
+        def cpu_count() -> int:
             return len(sched_getaffinity(0))
 
     except ImportError:
@@ -42,7 +43,7 @@ def pytest_xdist_auto_num_workers(config):
             # workaround https://bitbucket.org/pypy/pypy/issues/2375
             return 2
         try:
-            from os import cpu_count
+            from os import cpu_count  # type: ignore[assignment]
         except ImportError:
             from multiprocessing import cpu_count
     try:
@@ -52,15 +53,15 @@ def pytest_xdist_auto_num_workers(config):
     return n if n else 1
 
 
-def parse_numprocesses(s):
+def parse_numprocesses(s: str) -> int | Literal["auto", "logical"]:
     if s in ("auto", "logical"):
-        return s
+        return s  # type: ignore[return-value]
     elif s is not None:
         return int(s)
 
 
 @pytest.hookimpl
-def pytest_addoption(parser):
+def pytest_addoption(parser: pytest.Parser) -> None:
     # 'Help' formatting (same rules as pytest's):
     # Start with capitalized letters.
     # If a single phrase, do not end with period. If more than one phrase, all phrases end with periods.
@@ -188,16 +189,16 @@ def pytest_addoption(parser):
     parser.addini(
         "rsyncdirs",
         "list of (relative) paths to be rsynced for remote distributed testing.",
-        type="paths" if PYTEST_GTE_7 else "pathlist",
+        type="paths",
     )
     parser.addini(
         "rsyncignore",
         "list of (relative) glob-style paths to be ignored for rsyncing.",
-        type="paths" if PYTEST_GTE_7 else "pathlist",
+        type="paths",
     )
     parser.addini(
         "looponfailroots",
-        type="paths" if PYTEST_GTE_7 else "pathlist",
+        type="paths",
         help="directories to check for changes. Default: current directory.",
     )
 
@@ -208,7 +209,7 @@ def pytest_addoption(parser):
 
 
 @pytest.hookimpl
-def pytest_addhooks(pluginmanager):
+def pytest_addhooks(pluginmanager: pytest.PytestPluginManager) -> None:
     from xdist import newhooks
 
     pluginmanager.add_hookspecs(newhooks)
@@ -220,7 +221,7 @@ def pytest_addhooks(pluginmanager):
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config) -> None:
     config_line = (
         "xdist_group: specify group for tests should run in same session."
         "in relation to one another. Provided by pytest-xdist."
@@ -233,7 +234,7 @@ def pytest_configure(config):
 
     # Create the distributed session in case we have a valid distribution
     # mode and test environments.
-    if config.getoption("dist") != "no" and config.getoption("tx"):
+    if _is_distribution_mode(config):
         from xdist.dsession import DSession
 
         session = DSession(config)
@@ -258,8 +259,16 @@ def pytest_configure(config):
         config.issue_config_time_warning(warning, 2)
 
 
+def _is_distribution_mode(config: pytest.Config) -> bool:
+    """Whether distribution mode is on."""
+    return config.getoption("dist") != "no" and bool(config.getoption("tx"))
+
+
 @pytest.hookimpl(tryfirst=True)
-def pytest_cmdline_main(config):
+def pytest_cmdline_main(config: pytest.Config) -> None:
+    if config.option.distload:
+        config.option.dist = "load"
+
     usepdb = config.getoption("usepdb", False)  # a core option
     if config.option.numprocesses in ("auto", "logical"):
         if usepdb:
@@ -276,13 +285,16 @@ def pytest_cmdline_main(config):
         if config.option.maxprocesses:
             numprocesses = min(numprocesses, config.option.maxprocesses)
         config.option.tx = ["popen"] * numprocesses
-    if config.option.distload:
-        config.option.dist = "load"
+
+    if config.option.numprocesses == 0:
+        config.option.dist = "no"
+        config.option.tx = []
+
     val = config.getvalue
-    if not val("collectonly") and val("dist") != "no" and usepdb:
+    if not val("collectonly") and _is_distribution_mode(config) and usepdb:
         raise pytest.UsageError(
             "--pdb is incompatible with distributing tests; try using -n0 or -nauto."
-        )  # noqa: E501
+        )
 
 
 # -------------------------------------------------------------------------
@@ -290,16 +302,20 @@ def pytest_cmdline_main(config):
 # -------------------------------------------------------------------------
 
 
-def is_xdist_worker(request_or_session) -> bool:
-    """Return `True` if this is an xdist worker, `False` otherwise
+def is_xdist_worker(
+    request_or_session: pytest.FixtureRequest | pytest.Session,
+) -> bool:
+    """Return `True` if this is an xdist worker, `False` otherwise.
 
     :param request_or_session: the `pytest` `request` or `session` object
     """
     return hasattr(request_or_session.config, "workerinput")
 
 
-def is_xdist_controller(request_or_session) -> bool:
-    """Return `True` if this is the xdist controller, `False` otherwise
+def is_xdist_controller(
+    request_or_session: pytest.FixtureRequest | pytest.Session,
+) -> bool:
+    """Return `True` if this is the xdist controller, `False` otherwise.
 
     Note: this method also returns `False` when distribution has not been
     activated at all.
@@ -316,7 +332,9 @@ def is_xdist_controller(request_or_session) -> bool:
 is_xdist_master = is_xdist_controller
 
 
-def get_xdist_worker_id(request_or_session):
+def get_xdist_worker_id(
+    request_or_session: pytest.FixtureRequest | pytest.Session,
+) -> str:
     """Return the id of the current worker ('gw0', 'gw1', etc) or 'master'
     if running on the controller node.
 
@@ -326,14 +344,15 @@ def get_xdist_worker_id(request_or_session):
     :param request_or_session: the `pytest` `request` or `session` object
     """
     if hasattr(request_or_session.config, "workerinput"):
-        return request_or_session.config.workerinput["workerid"]
+        workerid: str = request_or_session.config.workerinput["workerid"]
+        return workerid
     else:
         # TODO: remove "master", ideally for a None
         return "master"
 
 
 @pytest.fixture(scope="session")
-def worker_id(request):
+def worker_id(request: pytest.FixtureRequest) -> str:
     """Return the id of the current worker ('gw0', 'gw1', etc) or 'master'
     if running on the master node.
     """
@@ -342,9 +361,10 @@ def worker_id(request):
 
 
 @pytest.fixture(scope="session")
-def testrun_uid(request):
+def testrun_uid(request: pytest.FixtureRequest) -> str:
     """Return the unique id of the current test."""
     if hasattr(request.config, "workerinput"):
-        return request.config.workerinput["testrunuid"]
+        testrunid: str = request.config.workerinput["testrunuid"]
+        return testrunid
     else:
         return uuid.uuid4().hex

@@ -1,35 +1,19 @@
 repos:
--   repo: https://github.com/PyCQA/autoflake
-    rev: v2.3.0
-    hooks:
-    -   id: autoflake
-        args: ["--in-place", "--remove-unused-variables", "--remove-all-unused-imports"]
--   repo: https://github.com/psf/black
-    rev: 24.2.0
-    hooks:
-    -   id: black
-        args: [--safe, --quiet, --target-version, py35]
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: "v0.3.7"
+  hooks:
+    - id: ruff
+      args: ["--fix"]
+    - id: ruff-format
 -   repo: https://github.com/asottile/blacken-docs
     rev: 1.16.0
     hooks:
     -   id: blacken-docs
         additional_dependencies: [black==23.1.0]
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v4.6.0
     hooks:
-    -   id: trailing-whitespace
-    -   id: end-of-file-fixer
     -   id: check-yaml
-    -   id: debug-statements
--   repo: https://github.com/PyCQA/flake8
-    rev: 7.0.0
-    hooks:
-    -   id: flake8
--   repo: https://github.com/asottile/pyupgrade
-    rev: v3.15.1
-    hooks:
-    -   id: pyupgrade
-        args: [--py3-plus]
 -   repo: local
     hooks:
     -   id: rst
@@ -39,11 +23,13 @@ repos:
         language: python
         additional_dependencies: [pygments, restructuredtext_lint]
 -   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
+    rev: v1.9.0
     hooks:
     -   id: mypy
         files: ^(src/|testing/)
         args: []
         additional_dependencies:
-          - pytest>=6.2.0
-          - py>=1.10.0
+          - pytest>=7.0.0
+          - execnet>=2.1.0
+          - types-psutil
+          - setproctitle

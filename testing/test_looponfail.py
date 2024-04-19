@@ -1,16 +1,16 @@
+from __future__ import annotations
+
+import pathlib
+from pathlib import Path
+import shutil
+import tempfile
+import textwrap
 import unittest.mock
-from typing import List
 
 import pytest
-import shutil
-import textwrap
-from pathlib import Path
 
 from xdist.looponfail import RemoteControl
 from xdist.looponfail import StatRecorder
-
-
-PYTEST_GTE_7 = hasattr(pytest, "version_tuple") and pytest.version_tuple >= (7, 0)  # type: ignore[attr-defined]
 
 
 class TestStatRecorder:
@@ -76,7 +76,7 @@ class TestStatRecorder:
         # make check()'s visit() call return our just removed
         # path as if we were in a race condition
         dirname = str(tmp)
-        dirnames: List[str] = []
+        dirnames: list[str] = []
         filenames = [str(p)]
         with unittest.mock.patch(
             "os.walk", return_value=[(dirname, dirnames, filenames)], autospec=True
@@ -123,12 +123,11 @@ class TestRemoteControl:
         item = pytester.getitem("def test_func():\n assert 0\n")
         control = RemoteControl(item.config)
         control.setup()
-        failures = control.runsession()
+        failures = control.runsession()[0]
         assert failures
         control.setup()
-        item_path = item.path if PYTEST_GTE_7 else Path(str(item.fspath))  # type: ignore[attr-defined]
-        item_path.write_text("def test_func():\n assert 1\n")
-        removepyc(item_path)
+        item.path.write_text("def test_func():\n assert 1\n")
+        removepyc(item.path)
         topdir, failures = control.runsession()[:2]
         assert not failures
 
@@ -144,10 +143,7 @@ class TestRemoteControl:
         control = RemoteControl(modcol.config)
         control.loop_once()
         assert control.failures
-        if PYTEST_GTE_7:
-            modcol_path = modcol.path  # type:ignore[attr-defined]
-        else:
-            modcol_path = Path(str(modcol.fspath))
+        modcol_path = modcol.path
 
         modcol_path.write_text(
             textwrap.dedent(
@@ -177,10 +173,7 @@ class TestRemoteControl:
                 """
             )
         )
-        if PYTEST_GTE_7:
-            parent = modcol.path.parent.parent  # type: ignore[attr-defined]
-        else:
-            parent = Path(modcol.fspath.dirpath().dirpath())
+        parent = modcol.path.parent.parent
         monkeypatch.chdir(parent)
         modcol.config.args = [
             str(Path(x).relative_to(parent)) for x in modcol.config.args
@@ -190,6 +183,43 @@ class TestRemoteControl:
         assert control.failures
         control.loop_once()
         assert control.failures
+
+    def test_ignore_sys_path_hook_entry(
+        self, pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Modifying sys.path as seen by the worker process is a bit tricky,
+        # because any changes made in the current process do not carry over.
+        # However, we can leverage the `sitecustomize` behavior to run arbitrary
+        # code when the subprocess interpreter is starting up. We just need to
+        # install our module in the search path, which we can accomplish by
+        # adding a temporary directory to PYTHONPATH.
+        tmpdir = tempfile.TemporaryDirectory()
+        with open(pathlib.Path(tmpdir.name) / "sitecustomize.py", "w") as custom:
+            print(
+                textwrap.dedent(
+                    """
+                    import sys
+                    sys.path.append('dummy.__path_hook__')
+                    """
+                ),
+                file=custom,
+            )
+
+        monkeypatch.setenv("PYTHONPATH", tmpdir.name, prepend=":")
+
+        item = pytester.getitem(
+            textwrap.dedent(
+                """
+                def test_func():
+                    import sys
+                    assert "dummy.__path_hook__" in sys.path
+                """
+            )
+        )
+        control = RemoteControl(item.config)
+        control.setup()
+        topdir, failures = control.runsession()[:2]
+        assert not failures
 
 
 class TestLooponFailing:
@@ -209,8 +239,7 @@ class TestLooponFailing:
         remotecontrol.loop_once()
         assert len(remotecontrol.failures) == 1
 
-        modcol_path = modcol.path if PYTEST_GTE_7 else Path(modcol.fspath)
-        modcol_path.write_text(
+        modcol.path.write_text(
             textwrap.dedent(
                 """
                 def test_one():
@@ -220,7 +249,7 @@ class TestLooponFailing:
                 """
             )
         )
-        removepyc(modcol_path)
+        removepyc(modcol.path)
         remotecontrol.loop_once()
         assert not remotecontrol.failures
 
@@ -238,8 +267,7 @@ class TestLooponFailing:
         assert len(remotecontrol.failures) == 1
         assert "test_one" in remotecontrol.failures[0]
 
-        modcol_path = modcol.path if PYTEST_GTE_7 else Path(modcol.fspath)
-        modcol_path.write_text(
+        modcol.path.write_text(
             textwrap.dedent(
                 """
                 def test_one():
@@ -249,7 +277,7 @@ class TestLooponFailing:
                 """
             )
         )
-        removepyc(modcol_path)
+        removepyc(modcol.path)
         remotecontrol.loop_once()
         assert len(remotecontrol.failures) == 0
         remotecontrol.loop_once()
@@ -304,7 +332,7 @@ class TestLooponFailing:
         remotecontrol = RemoteControl(modcol.config)
         orig_runsession = remotecontrol.runsession
 
-        def runsession_dups():
+        def runsession_dups() -> tuple[list[str], list[str], bool]:
             # twisted.trial test cases may report multiple errors.
             failures, reports, collection_failed = orig_runsession()
             print(failures)
